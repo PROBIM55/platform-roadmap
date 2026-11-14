@@ -1,7 +1,7 @@
 # Справочник маршрутов API сводного плана сетей
 
-Версия каталога: 1.1 от 2026-11-14. Базовый адрес: `https://bimplatforma.ru`. Заголовок: `Authorization: Bearer <ключ>`.
-Маршрутов, доступных ключу: 126.
+Версия каталога: 1.2 от 2026-11-14. Базовый адрес: `https://bimplatforma.ru`. Заголовок: `Authorization: Bearer <ключ>`.
+Маршрутов, доступных ключу: 129.
 
 ## Как читать справочник
 
@@ -217,6 +217,12 @@
 ### Архив (1)
 
 - [GET `…/archive`](#archive-download) — Скачать ZIP-архив оригиналов актуальных версий — всего плана или одного раздела.
+
+### Трассы (3)
+
+- [GET `…/sections/{sectionId}/cad-versions/{versionId}/routes`](#routes-read) — Прочитать последний сохранённый черновик трасс выбранной версии чертежа.
+- [POST `…/sections/{sectionId}/cad-versions/{versionId}/routes`](#routes-extract) — Выделить и сохранить черновик трасс из исходного чертежа по точным именам слоёв.
+- [PUT `…/route-drafts/{draftId}/candidates/{candidateId}`](#route-candidate-decide) — Сохранить решение инженера по кандидату трассы.
 
 ## Ключ
 
@@ -4323,3 +4329,131 @@
 | 404 | `NETWORK_DISCIPLINE_NOT_FOUND` | Раздел не найден. |
 
 Примечания: Версии, которых роль не видит, в архив не попадают. Ошибка определяется до первого байта (обычный JSON), дальше архив идёт потоком; обрыв потока означает неполный архив — проверяйте ZIP. Ответ не кэшируется.
+
+## Трассы
+
+<a id="routes-read"></a>
+### GET `/api/platform/projects/{projectId}/network-federation/sections/{sectionId}/cad-versions/{versionId}/routes`
+
+Прочитать последний сохранённый черновик трасс выбранной версии чертежа.
+
+- Идентификатор в каталоге: `routes-read`
+- Кто может: Участник с доступом к этой версии чертежа (роли: Администратор, Координатор, Загрузка, Просмотр).
+- Ключ: доступен ключам «Чтение» и «Полный — по роли»
+
+Параметры:
+
+| Имя | Где | Обязателен | Описание |
+|---|---|---|---|
+| `projectId` | путь | да | Идентификатор проекта из списка ключа. |
+| `sectionId` | путь | да | Идентификатор файла сводного плана. |
+| `versionId` | путь | да | Идентификатор версии чертежа. |
+
+Ответ: draft (черновик или null), placementCurrent (boolean). Обёртки ok нет. Черновик содержит исходный report и отдельные worldSegments, revision и decisions.
+
+Ошибки маршрута:
+
+| Статус | Код | Когда |
+|---|---|---|
+| 403 | `NETWORK_SOURCE_ACCESS_DENIED` | Версия недоступна владельцу ключа. |
+| 404 | `NETWORK_SECTION_NOT_FOUND` | Файл не найден. |
+| 404 | `NETWORK_CAD_VERSION_NOT_FOUND` | Версия чертежа не найдена. |
+
+Примечания: Чтение не запускает выделение геометрии. placementCurrent проверяет соответствие исходника, единиц, нормализации и текущего размещения. Геометрия report хранится в drawing-wcs-mm, worldSegments — в миллиметрах проекта.
+
+<a id="routes-extract"></a>
+### POST `/api/platform/projects/{projectId}/network-federation/sections/{sectionId}/cad-versions/{versionId}/routes`
+
+Выделить и сохранить черновик трасс из исходного чертежа по точным именам слоёв.
+
+- Идентификатор в каталоге: `routes-extract`
+- Кто может: Администратор, координатор или исполнитель с правом записи в раздел и доступом к версии (роли: Администратор, Координатор, Загрузка).
+- Ключ: только «Полный — по роли»
+
+Параметры:
+
+| Имя | Где | Обязателен | Описание |
+|---|---|---|---|
+| `projectId` | путь | да | Идентификатор проекта из списка ключа. |
+| `sectionId` | путь | да | Идентификатор файла сводного плана. |
+| `versionId` | путь | да | Идентификатор версии чертежа. |
+
+Тело запроса (JSON):
+
+| Поле | Тип | Обязательно | Описание |
+|---|---|---|---|
+| `placementId` | string | да | Идентификатор текущего размещения версии из маршрута placements. |
+| `layers` | string[] | да | От 1 до 64 уникальных точных имён слоёв, каждое непустое и не длиннее 512 знаков. Порядок учитывается при повторе. |
+| `expectedDocumentVersion` | integer | да | document.version из последнего GET сводного плана. |
+
+Ответ: Черновик напрямую, без обёртки ok или draft: id, projectId, sectionId, versionId, sourceSha256, sourceUnit, scaleToMm, placement, normalizationProfile, artifactGeneration, algorithmFingerprint, revision, report, worldSegments[], decisions[], createdByUserId, createdAtUtc.
+
+Ошибки маршрута:
+
+| Статус | Код | Когда |
+|---|---|---|
+| 403 | `NETWORK_SOURCE_ACCESS_DENIED` | Версия недоступна владельцу ключа. |
+| 404 | `NETWORK_SECTION_NOT_FOUND` | Файл не найден. |
+| 404 | `NETWORK_CAD_VERSION_NOT_FOUND` | Версия чертежа не найдена. |
+| 403 | `NETWORK_DISCIPLINE_WRITE_DENIED` | Нет права записи в раздел. |
+| 428 | `NETWORK_DOCUMENT_VERSION_REQUIRED` | Не передан expectedDocumentVersion. |
+| 409 | `NETWORK_FEDERATION_DOCUMENT_CONFLICT` | Версия документа изменилась до выделения или во время него. Перечитайте сводный план. |
+| 400 | `NETWORK_ROUTE_LAYERS_INVALID` | Список слоёв не соответствует ограничениям. |
+| 404 | `NETWORK_PLACEMENT_NOT_FOUND` | placementId отсутствует или указывает на размещение другой версии. |
+| 409 | `NETWORK_ROUTE_PLACEMENT_CHANGED` | Размещение перестало быть текущим. |
+| 409 | `NETWORK_ROUTE_READER_CHANGED` | Алгоритм изменился во время обработки. |
+| 409 | `NETWORK_ROUTE_SOURCE_MISMATCH` | Отчёт не соответствует исходной версии чертежа. |
+| 409 | `CAD_ROUTE_IMPORT_NOT_SUCCEEDED` | Импорт исходного чертежа не завершён успешно. |
+| 422 | `NETWORK_ROUTE_GEOMETRY_INVALID` | Отчёт содержит некорректные координаты или дуги. |
+| 422 | `NETWORK_ROUTE_ID_INVALID` | Идентификатор кандидата отсутствует или повторяется. |
+| 422 | `NETWORK_ROUTE_ARC_PLACEMENT_UNSUPPORTED` | Преобразование размещения не поддерживает исходные дуги. |
+| 422 | `CAD_ROUTE_READER_FAILED` | Чтение геометрии завершилось ошибкой. |
+| 422 | `CAD_ROUTE_REPORT_TOO_LARGE` | Отчёт превышает 32 МиБ. |
+| 503 | `CAD_ROUTE_READER_NOT_CONFIGURED` | На сервере не настроен reader исходной геометрии. |
+| 503 | `CAD_ROUTE_READER_BUSY` | Reader занят другим выделением трасс. |
+| 503 | `CAD_ROUTE_READER_START_FAILED` | Не удалось запустить reader. |
+| 504 | `CAD_ROUTE_READER_TIMEOUT` | Reader превысил время выполнения. |
+
+Примечания: Геометрию вычисляет сервер. При актуальной версии документа, совпадающих слоях, размещении и отпечатке алгоритма возвращается существующий черновик с решениями инженера. Повтор после сохранения требует перечитать document.version. Новое выделение сохраняет прежние черновики в истории. Результат является черновиком для проверки инженером.
+
+<a id="route-candidate-decide"></a>
+### PUT `/api/platform/projects/{projectId}/network-federation/route-drafts/{draftId}/candidates/{candidateId}`
+
+Сохранить решение инженера по кандидату трассы.
+
+- Идентификатор в каталоге: `route-candidate-decide`
+- Кто может: Администратор, координатор или исполнитель с правом записи в раздел и доступом к версии (роли: Администратор, Координатор, Загрузка).
+- Ключ: только «Полный — по роли»
+
+Параметры:
+
+| Имя | Где | Обязателен | Описание |
+|---|---|---|---|
+| `projectId` | путь | да | Идентификатор проекта из списка ключа. |
+| `draftId` | путь | да | Идентификатор сохранённого черновика. |
+| `candidateId` | путь | да | Идентификатор кандидата из report.candidates[].id. |
+
+Тело запроса (JSON):
+
+| Поле | Тип | Обязательно | Описание |
+|---|---|---|---|
+| `status` | string | да | candidate — вернуть в кандидаты, confirmed — подтвердить, excluded — исключить. |
+| `expectedRevision` | integer | да | revision из последнего ответа черновика. |
+
+Ответ: Черновик напрямую, без обёртки ok или draft: id, projectId, sectionId, versionId, sourceSha256, sourceUnit, scaleToMm, placement, normalizationProfile, artifactGeneration, algorithmFingerprint, revision, report, worldSegments[], decisions[], createdByUserId, createdAtUtc.
+
+Ошибки маршрута:
+
+| Статус | Код | Когда |
+|---|---|---|
+| 428 | `NETWORK_DOCUMENT_VERSION_REQUIRED` | Не передан expectedRevision. |
+| 403 | `NETWORK_SOURCE_ACCESS_DENIED` | Нет доступа к версии. |
+| 403 | `NETWORK_DISCIPLINE_WRITE_DENIED` | Нет права записи в раздел. |
+| 404 | `NETWORK_ROUTE_DRAFT_NOT_FOUND` | Черновик не найден. |
+| 404 | `NETWORK_ROUTE_CANDIDATE_NOT_FOUND` | Кандидат отсутствует в черновике. |
+| 400 | `NETWORK_ROUTE_DECISION_INVALID` | Недопустимое значение status. |
+| 409 | `NETWORK_ROUTE_REVISION_CONFLICT` | Черновик уже изменён. Перечитайте его. |
+| 409 | `NETWORK_ROUTE_PLACEMENT_CHANGED` | Размещение или исходная версия изменились. |
+| 409 | `NETWORK_ROUTE_DRAFT_SUPERSEDED` | У этой версии чертежа уже есть более новый черновик. |
+
+Примечания: Успешная запись увеличивает revision черновика и версию документа. Повтор с прежней expectedRevision возвращает 409. Запись разрешена для последнего черновика актуального размещения. Исходные сегменты сохраняются.

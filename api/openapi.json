@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "API сводного плана сетей",
-    "version": "1.1",
+    "version": "1.2",
     "description": "Те же маршруты, что использует интерфейс сводного плана сетей. Ключ — личный ключ сотрудника компании, заголовок «Authorization: Bearer <ключ>». Права берутся из роли владельца ключа в проекте. Спецификация описывает маршруты, доступные ключу (закрытых для ключа — 13, они перечислены в reference.md). Подробности — README.md и 02_соглашения.md."
   },
   "servers": [
@@ -72,6 +72,9 @@
     },
     {
       "name": "архив"
+    },
+    {
+      "name": "трассы"
     }
   ],
   "paths": {
@@ -15377,6 +15380,463 @@
           "viewer"
         ],
         "x-catalog-id": "archive-download"
+      }
+    },
+    "/api/platform/projects/{projectId}/network-federation/sections/{sectionId}/cad-versions/{versionId}/routes": {
+      "get": {
+        "operationId": "routes-read",
+        "tags": [
+          "трассы"
+        ],
+        "summary": "Прочитать последний сохранённый черновик трасс выбранной версии чертежа.",
+        "description": "Кто может: Участник с доступом к этой версии чертежа.\n\nОтвет: draft (черновик или null), placementCurrent (boolean). Обёртки ok нет. Черновик содержит исходный report и отдельные worldSegments, revision и decisions.\n\nПримечания: Чтение не запускает выделение геометрии. placementCurrent проверяет соответствие исходника, единиц, нормализации и текущего размещения. Геометрия report хранится в drawing-wcs-mm, worldSegments — в миллиметрах проекта.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Идентификатор проекта из списка ключа.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sectionId",
+            "in": "path",
+            "required": true,
+            "description": "Идентификатор файла сводного плана.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "versionId",
+            "in": "path",
+            "required": true,
+            "description": "Идентификатор версии чертежа.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "draft (черновик или null), placementCurrent (boolean). Обёртки ok нет. Черновик содержит исходный report и отдельные worldSegments, revision и decisions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Нет действующего ключа. Коды: AGENT_TOKEN_INVALID — Bearer-ключ недействителен, отозван или просрочен (тело JSON). На маршруте проверки ключа — также при отсутствии ключа.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Нет прав. Коды: NETWORK_SOURCE_ACCESS_DENIED — Версия недоступна владельцу ключа.; AGENT_GRANT_DENIED — Запись ключом «Чтение» или маршрут закрыт для ключа.; API_KEY_EMPLOYEES_ONLY — Ключи доступны только сотрудникам компании.; PROJECT_ACCESS_DENIED — Владелец ключа не участник проекта.; PROJECT_MODULE_ACCESS_DENIED — В составе проекта нет сводного плана сетей.; MODULE_ACCESS_DENIED — У учётной записи нет права на модуль.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Не найдено. Коды: NETWORK_SECTION_NOT_FOUND — Файл не найден.; NETWORK_CAD_VERSION_NOT_FOUND — Версия чертежа не найдена.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Слишком много запросов. Коды: RATE_LIMIT_AGENT_READ — Больше 600 чтений в минуту; заголовок Retry-After.; RATE_LIMIT_AGENT_WRITE — Больше 120 записей в минуту; заголовок Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-key-mode": "read",
+        "x-internal": false,
+        "x-roles": [
+          "admin",
+          "coordinator",
+          "uploader",
+          "viewer"
+        ],
+        "x-catalog-id": "routes-read"
+      },
+      "post": {
+        "operationId": "routes-extract",
+        "tags": [
+          "трассы"
+        ],
+        "summary": "Выделить и сохранить черновик трасс из исходного чертежа по точным именам слоёв.",
+        "description": "Кто может: Администратор, координатор или исполнитель с правом записи в раздел и доступом к версии.\n\nОтвет: Черновик напрямую, без обёртки ok или draft: id, projectId, sectionId, versionId, sourceSha256, sourceUnit, scaleToMm, placement, normalizationProfile, artifactGeneration, algorithmFingerprint, revision, report, worldSegments[], decisions[], createdByUserId, createdAtUtc.\n\nПримечания: Геометрию вычисляет сервер. При актуальной версии документа, совпадающих слоях, размещении и отпечатке алгоритма возвращается существующий черновик с решениями инженера. Повтор после сохранения требует перечитать document.version. Новое выделение сохраняет прежние черновики в истории. Результат является черновиком для проверки инженером.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Идентификатор проекта из списка ключа.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sectionId",
+            "in": "path",
+            "required": true,
+            "description": "Идентификатор файла сводного плана.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "versionId",
+            "in": "path",
+            "required": true,
+            "description": "Идентификатор версии чертежа.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "placementId": {
+                    "type": "string",
+                    "description": "Идентификатор текущего размещения версии из маршрута placements."
+                  },
+                  "layers": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "От 1 до 64 уникальных точных имён слоёв, каждое непустое и не длиннее 512 знаков. Порядок учитывается при повторе."
+                  },
+                  "expectedDocumentVersion": {
+                    "type": "integer",
+                    "description": "document.version из последнего GET сводного плана."
+                  }
+                },
+                "required": [
+                  "placementId",
+                  "layers",
+                  "expectedDocumentVersion"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Черновик напрямую, без обёртки ok или draft: id, projectId, sectionId, versionId, sourceSha256, sourceUnit, scaleToMm, placement, normalizationProfile, artifactGeneration, algorithmFingerprint, revision, report, worldSegments[], decisions[], createdByUserId, createdAtUtc.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Неверный запрос. Коды: NETWORK_ROUTE_LAYERS_INVALID — Список слоёв не соответствует ограничениям.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Нет действующего ключа. Коды: AGENT_TOKEN_INVALID — Bearer-ключ недействителен, отозван или просрочен (тело JSON). На маршруте проверки ключа — также при отсутствии ключа.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Нет прав. Коды: NETWORK_SOURCE_ACCESS_DENIED — Версия недоступна владельцу ключа.; NETWORK_DISCIPLINE_WRITE_DENIED — Нет права записи в раздел.; AGENT_GRANT_DENIED — Запись ключом «Чтение» или маршрут закрыт для ключа.; API_KEY_EMPLOYEES_ONLY — Ключи доступны только сотрудникам компании.; PROJECT_ACCESS_DENIED — Владелец ключа не участник проекта.; PROJECT_MODULE_ACCESS_DENIED — В составе проекта нет сводного плана сетей.; MODULE_ACCESS_DENIED — У учётной записи нет права на модуль.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Не найдено. Коды: NETWORK_SECTION_NOT_FOUND — Файл не найден.; NETWORK_CAD_VERSION_NOT_FOUND — Версия чертежа не найдена.; NETWORK_PLACEMENT_NOT_FOUND — placementId отсутствует или указывает на размещение другой версии.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Конфликт состояния. Коды: NETWORK_FEDERATION_DOCUMENT_CONFLICT — Версия документа изменилась до выделения или во время него. Перечитайте сводный план.; NETWORK_ROUTE_PLACEMENT_CHANGED — Размещение перестало быть текущим.; NETWORK_ROUTE_READER_CHANGED — Алгоритм изменился во время обработки.; NETWORK_ROUTE_SOURCE_MISMATCH — Отчёт не соответствует исходной версии чертежа.; CAD_ROUTE_IMPORT_NOT_SUCCEEDED — Импорт исходного чертежа не завершён успешно.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Не прошла проверка содержимого. Коды: NETWORK_ROUTE_GEOMETRY_INVALID — Отчёт содержит некорректные координаты или дуги.; NETWORK_ROUTE_ID_INVALID — Идентификатор кандидата отсутствует или повторяется.; NETWORK_ROUTE_ARC_PLACEMENT_UNSUPPORTED — Преобразование размещения не поддерживает исходные дуги.; CAD_ROUTE_READER_FAILED — Чтение геометрии завершилось ошибкой.; CAD_ROUTE_REPORT_TOO_LARGE — Отчёт превышает 32 МиБ.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Не передана версия записи. Коды: NETWORK_DOCUMENT_VERSION_REQUIRED — Не передан expectedDocumentVersion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Слишком много запросов. Коды: RATE_LIMIT_AGENT_READ — Больше 600 чтений в минуту; заголовок Retry-After.; RATE_LIMIT_AGENT_WRITE — Больше 120 записей в минуту; заголовок Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Хранилище недоступно. Коды: CAD_ROUTE_READER_NOT_CONFIGURED — На сервере не настроен reader исходной геометрии.; CAD_ROUTE_READER_BUSY — Reader занят другим выделением трасс.; CAD_ROUTE_READER_START_FAILED — Не удалось запустить reader.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Ошибка. Коды: CAD_ROUTE_READER_TIMEOUT — Reader превысил время выполнения.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-key-mode": "full",
+        "x-internal": false,
+        "x-roles": [
+          "admin",
+          "coordinator",
+          "uploader"
+        ],
+        "x-catalog-id": "routes-extract"
+      }
+    },
+    "/api/platform/projects/{projectId}/network-federation/route-drafts/{draftId}/candidates/{candidateId}": {
+      "put": {
+        "operationId": "route-candidate-decide",
+        "tags": [
+          "трассы"
+        ],
+        "summary": "Сохранить решение инженера по кандидату трассы.",
+        "description": "Кто может: Администратор, координатор или исполнитель с правом записи в раздел и доступом к версии.\n\nОтвет: Черновик напрямую, без обёртки ok или draft: id, projectId, sectionId, versionId, sourceSha256, sourceUnit, scaleToMm, placement, normalizationProfile, artifactGeneration, algorithmFingerprint, revision, report, worldSegments[], decisions[], createdByUserId, createdAtUtc.\n\nПримечания: Успешная запись увеличивает revision черновика и версию документа. Повтор с прежней expectedRevision возвращает 409. Запись разрешена для последнего черновика актуального размещения. Исходные сегменты сохраняются.",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "description": "Идентификатор проекта из списка ключа.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "draftId",
+            "in": "path",
+            "required": true,
+            "description": "Идентификатор сохранённого черновика.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "candidateId",
+            "in": "path",
+            "required": true,
+            "description": "Идентификатор кандидата из report.candidates[].id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "description": "candidate — вернуть в кандидаты, confirmed — подтвердить, excluded — исключить."
+                  },
+                  "expectedRevision": {
+                    "type": "integer",
+                    "description": "revision из последнего ответа черновика."
+                  }
+                },
+                "required": [
+                  "status",
+                  "expectedRevision"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Черновик напрямую, без обёртки ok или draft: id, projectId, sectionId, versionId, sourceSha256, sourceUnit, scaleToMm, placement, normalizationProfile, artifactGeneration, algorithmFingerprint, revision, report, worldSegments[], decisions[], createdByUserId, createdAtUtc.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Неверный запрос. Коды: NETWORK_ROUTE_DECISION_INVALID — Недопустимое значение status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Нет действующего ключа. Коды: AGENT_TOKEN_INVALID — Bearer-ключ недействителен, отозван или просрочен (тело JSON). На маршруте проверки ключа — также при отсутствии ключа.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Нет прав. Коды: NETWORK_SOURCE_ACCESS_DENIED — Нет доступа к версии.; NETWORK_DISCIPLINE_WRITE_DENIED — Нет права записи в раздел.; AGENT_GRANT_DENIED — Запись ключом «Чтение» или маршрут закрыт для ключа.; API_KEY_EMPLOYEES_ONLY — Ключи доступны только сотрудникам компании.; PROJECT_ACCESS_DENIED — Владелец ключа не участник проекта.; PROJECT_MODULE_ACCESS_DENIED — В составе проекта нет сводного плана сетей.; MODULE_ACCESS_DENIED — У учётной записи нет права на модуль.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Не найдено. Коды: NETWORK_ROUTE_DRAFT_NOT_FOUND — Черновик не найден.; NETWORK_ROUTE_CANDIDATE_NOT_FOUND — Кандидат отсутствует в черновике.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Конфликт состояния. Коды: NETWORK_ROUTE_REVISION_CONFLICT — Черновик уже изменён. Перечитайте его.; NETWORK_ROUTE_PLACEMENT_CHANGED — Размещение или исходная версия изменились.; NETWORK_ROUTE_DRAFT_SUPERSEDED — У этой версии чертежа уже есть более новый черновик.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Не передана версия записи. Коды: NETWORK_DOCUMENT_VERSION_REQUIRED — Не передан expectedRevision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Слишком много запросов. Коды: RATE_LIMIT_AGENT_READ — Больше 600 чтений в минуту; заголовок Retry-After.; RATE_LIMIT_AGENT_WRITE — Больше 120 записей в минуту; заголовок Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-key-mode": "full",
+        "x-internal": false,
+        "x-roles": [
+          "admin",
+          "coordinator",
+          "uploader"
+        ],
+        "x-catalog-id": "route-candidate-decide"
       }
     }
   },
