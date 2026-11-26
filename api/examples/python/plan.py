@@ -12,11 +12,23 @@ from common import Client, run
 
 def main():
     parser = argparse.ArgumentParser(description="Сводка сводного плана сетей проекта")
-    parser.add_argument("--project", required=True, help="идентификатор проекта")
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--project", help="стабильный ID проекта")
+    selection.add_argument("--projects", action="store_true", help="показать ID и актуальные названия доступных ключу проектов")
     parser.add_argument("--json", action="store_true", help="напечатать ответ сервера целиком")
     args = parser.parse_args()
+    if args.project is not None and not args.project.strip():
+        parser.error("--project не может быть пустым")
 
     client = Client()
+    if args.projects:
+        identity = client.get("/api/platform/network-federation/me")
+        if args.json:
+            print(json.dumps(identity, ensure_ascii=False, indent=2))
+        else:
+            for project in identity["projects"]:
+                print("%s: %s" % (project["projectId"], project["name"]))
+        return
     plan = client.get(client.plan_path(args.project))
     if args.json:
         print(json.dumps(plan, ensure_ascii=False, indent=2))

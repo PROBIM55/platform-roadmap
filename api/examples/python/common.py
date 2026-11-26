@@ -173,28 +173,43 @@ def _api_error(status, body):
 # --- помощники для плана ---------------------------------------------------------
 
 
-def find_discipline(plan, name):
-    """Раздел по названию (без учёта регистра) или None."""
-    wanted = name.strip().casefold()
-    for item in plan["document"]["disciplines"]:
-        if item["name"].strip().casefold() == wanted:
-            return item
-    return None
+class SelectionError(ValueError):
+    """Объект нельзя однозначно выбрать; запись продолжать нельзя."""
 
 
-def find_section(plan, discipline_id, name):
-    """Файл раздела по названию (без учёта регистра) или None."""
+def _find_unique(items, name, kind):
     wanted = name.strip().casefold()
-    for item in plan["document"]["sections"]:
-        if item["disciplineId"] == discipline_id and item["name"].strip().casefold() == wanted:
-            return item
-    return None
+    matches = [item for item in items if item["name"].strip().casefold() == wanted]
+    if len(matches) > 1:
+        raise SelectionError("%s «%s»: найдено несколько совпадений. Укажите ID: %s."
+                             % (kind, name, ", ".join(item["id"] for item in matches)))
+    return matches[0] if matches else None
+
+
+def find_discipline(plan, name=None, discipline_id=None):
+    """Раздел по точному ID или единственному совпадению имени. ID не заменяется поиском по имени."""
+    items = plan["document"]["disciplines"]
+    if discipline_id is not None:
+        return next((item for item in items if item["id"] == discipline_id), None)
+    return _find_unique(items, name, "Раздел")
+
+
+def find_section(plan, discipline_id=None, name=None, section_id=None):
+    """Файл по точному ID или единственному имени внутри раздела."""
+    items = [item for item in plan["document"]["sections"]
+             if discipline_id is None or item["disciplineId"] == discipline_id]
+    if section_id is not None:
+        return next((item for item in items if item["id"] == section_id), None)
+    return _find_unique(items, name, "Файл")
 
 
 def run(main):
     """Запуск с понятным сообщением об ошибке и кодом выхода. Ключ в сообщения не попадает."""
     try:
         main()
+    except SelectionError as error:
+        print("Ошибка выбора: %s" % error, file=sys.stderr)
+        sys.exit(2)
     except ApiError as error:
         print("Ошибка сервера: %s" % error, file=sys.stderr)
         if error.is_denial:

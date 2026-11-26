@@ -1,11 +1,12 @@
 """Загружает чертёж DWG или DXF новой версией файла сводного плана.
 
-Файл ищется по названию в нужном разделе; если его нет - создаётся. Дальше: сессия загрузки,
+Для повторной синхронизации сохраняйте projectId и sectionId. Создание файла требует --create-section.
+Дальше: сессия загрузки,
 куски по 8 МиБ с Content-Range, завершение, ожидание импорта, регистрация версии.
 
 Пример:
-  python upload_drawing.py --project <id> --discipline "Водоснабжение" \\
-      --section "План сетей В1" --file plan_v2.dwg --unit mm --note "Добавлены сети на участке 2"
+  python upload_drawing.py --project <projectId> --section-id <sectionId> \\
+      --file plan_v2.dwg --unit mm --note "Добавлены сети на участке 2"
 
 Нужен ключ в режиме «Полный — по роли» и право записи в раздел.
 """
@@ -94,9 +95,14 @@ def wait_ready(client, base, section_id, version_id, timeout):
 def main():
     parser = argparse.ArgumentParser(description="Загрузка новой версии чертежа в сводный план")
     parser.add_argument("--project", required=True, help="идентификатор проекта")
-    parser.add_argument("--discipline", required=True, help="название раздела")
+    discipline_choice = parser.add_mutually_exclusive_group()
+    discipline_choice.add_argument("--discipline-id", help="стабильный ID раздела из плана")
+    discipline_choice.add_argument("--discipline", help="название раздела (только если оно однозначно)")
     parser.add_argument("--file", required=True, help="путь к файлу .dwg или .dxf")
-    parser.add_argument("--section", help="название файла в плане (по умолчанию - имя файла без расширения)")
+    section_choice = parser.add_mutually_exclusive_group()
+    section_choice.add_argument("--section-id", help="стабильный ID существующего файла; раздел определяется из плана")
+    section_choice.add_argument("--section", help="название файла в плане (по умолчанию - имя файла без расширения)")
+    parser.add_argument("--create-section", action="store_true", help="разрешить создание файла, если выбранное имя не найдено")
     parser.add_argument("--unit", choices=["m", "mm"], help="единицы чертежа; без параметра берутся определённые сервером")
     parser.add_argument("--note", help="что изменилось (до 1000 знаков)")
     parser.add_argument("--label", help="метка версии")
@@ -104,6 +110,14 @@ def main():
     parser.add_argument("--wait-ready", action="store_true", help="дождаться подготовки показа и вывести итоговый статус")
     parser.add_argument("--timeout", type=int, default=600, help="сколько секунд ждать импорт (по умолчанию 600)")
     args = parser.parse_args()
+    for field in ("project", "discipline_id", "section_id", "discipline", "section"):
+        value = getattr(args, field)
+        if value is not None and not value.strip():
+            parser.error("--%s не может быть пустым" % field.replace("_", "-"))
+    if not args.section_id and not (args.discipline_id or args.discipline):
+        parser.error("укажите --section-id либо --discipline-id/--discipline")
+    if args.section_id and args.create_section:
+        parser.error("--create-section нельзя сочетать с --section-id")
 
     path = args.file
     if not os.path.isfile(path):
@@ -118,12 +132,24 @@ def main():
     base = client.plan_path(args.project)
 
     plan = client.get(base)
-    discipline = find_discipline(plan, args.discipline)
-    if discipline is None:
-        raise SystemExit("Раздел «%s» не найден в плане." % args.discipline)
-
-    section = find_section(plan, discipline["id"], section_name)
+    discipline = None
+    if args.discipline_id or args.discipline:
+        discipline = find_discipline(plan, args.discipline, discipline_id=args.discipline_id)
+        if discipline is None:
+            raise SystemExit("Раздел «%s» не найден в плане." % (args.discipline_id or args.discipline))
+    if args.section_id:
+        section = find_section(plan, discipline["id"] if discipline else None, section_id=args.section_id)
+        if section is None:
+            raise SystemExit("Файл с ID %s не найден в выбранном проекте/разделе. Новый файл не создаётся." % args.section_id)
+        discipline = find_discipline(plan, discipline_id=section["disciplineId"])
+        if discipline is None:
+            raise SystemExit("Раздел файла с ID %s не найден в плане." % args.section_id)
+    else:
+        section = find_section(plan, discipline["id"], section_name)
     if section is None:
+        if not args.create_section:
+            raise SystemExit("Файл «%s» не найден. Для существующего файла укажите --section-id; "
+                             "для нового добавьте --create-section." % section_name)
         print("Файл «%s» в разделе «%s» не найден, создаю." % (section_name, discipline["name"]))
         section = client.post(base + "/sections", {"disciplineId": discipline["id"], "name": section_name})["section"]
     else:
@@ -180,7 +206,9 @@ def main():
         state = wait_ready(client, base, section["id"], version["id"], args.timeout)
         print("Подготовка показа: %s." % state)
         plan = client.get(base)
-        current = find_section(plan, discipline["id"], section["name"])
+        current = find_section(plan, section_id=section["id"])
+        if current is None:
+            raise SystemExit("Файл с ID %s больше не доступен в плане." % section["id"])
         final = next((v for v in current["cadVersions"] if v["id"] == version["id"]), None)
         if final:
             print("Итоговый статус версии: %s." % final["status"])
